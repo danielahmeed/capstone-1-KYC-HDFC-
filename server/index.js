@@ -1,267 +1,514 @@
 const express = require('express');
+const multer = require('multer');
+const sharp = require('sharp');
+const fs = require('fs').promises;
+const path = require('path');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
-const sharp = require('sharp');
 const { createWorker } = require('tesseract.js');
-require('dotenv').config();
+const { checkForDuplicate, checkForBiometricDuplicate, storeUser, storeBiometricFingerprint, logKYCAttempt, analyzeFailedAttempts } = require('./db');
 
 const app = express();
-const PORT = process.env.PORT || 5001;
+const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(helmet());
 app.use(cors());
 app.use(morgan('combined'));
-app.use(express.json({ limit: '10mb' })); // Increase limit for image data
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Routes
-app.get('/', (req, res) => {
-  res.json({ message: 'Digital KYC Backend API' });
+// Multer configuration for file uploads
+const upload = multer({ 
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'));
+    }
+  }
 });
+
+// Utility function to decode base64 image
+function decodeBase64Image(dataString) {
+  if (!dataString) {
+    throw new Error('No image data provided');
+  }
+  
+  // Handle both data URL and plain base64
+  let imageData = dataString;
+  let imageType = 'jpeg';
+  
+  if (dataString.startsWith('data:')) {
+    const matches = dataString.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
+    if (matches && matches.length === 3) {
+      imageType = matches[1].split('/')[1];
+      imageData = matches[2];
+    }
+  }
+  
+  return {
+    type: imageType,
+    data: Buffer.from(imageData, 'base64')
+  };
+}
+
+// Function to validate document fields using regex patterns
+function validateDocumentFields(extractedText) {
+  const validations = {
+    fullName: null,
+    documentNumber: null,
+    dateOfBirth: null,
+    expiryDate: null,
+    nationality: null
+  };
+  
+  // Split text into lines for easier processing
+  const lines = extractedText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+  
+  // Define regex patterns for common document fields
+  const patterns = {
+    fullName: [
+      /(?:name|full\s*name)[:\s]*([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
+      /([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)(?:\s+(?:son|daughter|wife)\s+of)/i
+    ],
+    documentNumber: [
+      /(?:document|id|passport)\s*(?:no|number)[:\s]*([A-Z0-9]{6,15})/i,
+      /([A-Z0-9]{6,15})\s+(?:issued|valid)/i
+    ],
+    dateOfBirth: [
+      /(?:date\s*of\s*birth|dob|birth\s*date)[:\s]*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+      /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\s+(?:dob|birth)/i
+    ],
+    expiryDate: [
+      /(?:expiry|valid\s*until|valid\s*through)[:\s]*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+      /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\s+(?:expiry|expires)/i
+    ],
+    nationality: [
+      /(?:nationality|country)[:\s]*([A-Z][a-z]+)/i,
+      /([A-Z][a-z]+)\s+(?:citizen|national)/i
+    ]
+  };
+  
+  // Try to extract each field using patterns
+  Object.keys(patterns).forEach(field => {
+    for (const pattern of patterns[field]) {
+      for (const line of lines) {
+        const match = line.match(pattern);
+        if (match && match[1]) {
+          validations[field] = match[1].trim();
+          break;
+        }
+      }
+      if (validations[field]) break;
+    }
+  });
+  
+  return validations;
+}
+
+// Function to perform OCR with Tesseract.js
+async function performOCR(imageBuffer) {
+  try {
+    // Create a Tesseract worker
+    const worker = await createWorker({
+      logger: m => console.log(m)
+    });
+    
+    await worker.load();
+    await worker.loadLanguage('eng');
+    await worker.initialize('eng');
+    
+    // Perform OCR on the image buffer
+    const { data: { text } } = await worker.recognize(imageBuffer);
+    
+    await worker.terminate();
+    
+    return text;
+  } catch (error) {
+    console.error('OCR Error:', error);
+    throw new Error('Failed to perform OCR on document');
+  }
+}
+
+// Add this function before the document scanning endpoint
+function detectAndRemoveGlare(imageBuffer) {
+  // This is a simplified glare detection and removal algorithm
+  // In a real implementation, this would use more sophisticated computer vision techniques
+  
+  // For now, we'll implement a basic approach:
+  // 1. Detect high brightness areas that could be glare
+  // 2. Reduce the brightness of those areas
+  // 3. Enhance the overall image quality
+  
+  return sharp(imageBuffer)
+    // Apply a mild blur to reduce noise
+    .blur(0.5)
+    // Adjust brightness and contrast to improve overall image quality
+    .modulate({ brightness: 1.05, contrast: 1.1 })
+    // Apply a slight gamma correction to balance highlights
+    .gamma(0.9)
+    // Apply unsharp masking to enhance details
+    .sharpen({ sigma: 0.5, flat: 1.0, jagged: 2.0 })
+    // Return the processed image buffer
+    .toBuffer();
+}
+
+// Add image enhancement function
+function enhanceImage(imageBuffer) {
+  return sharp(imageBuffer)
+    // Normalize the image to improve contrast
+    .normalize()
+    // Apply slight sharpening to enhance details
+    .sharpen({ sigma: 0.5 })
+    // Adjust saturation for better readability
+    .modulate({ saturation: 1.1 })
+    // Return the enhanced image buffer
+    .toBuffer();
+}
 
 // Document scanning endpoint with real image processing
 app.post('/api/kyc/document-scan', async (req, res) => {
   try {
     const { documentType, imageData } = req.body;
     
-    // Validate input
     if (!imageData) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'No image data provided' 
-      });
-    }
-    
-    // Remove data URL prefix if present
-    let base64Data = imageData;
-    if (imageData.startsWith('data:image')) {
-      base64Data = imageData.split(',')[1];
-    }
-    
-    // Convert base64 to buffer
-    const imageBuffer = Buffer.from(base64Data, 'base64');
-    
-    // Get image metadata to check dimensions
-    const metadata = await sharp(imageBuffer).metadata();
-    
-    // Validate minimum resolution requirement (300x200)
-    if (metadata.width < 300 || metadata.height < 200) {
       return res.status(400).json({
         success: false,
-        message: `Image resolution (${metadata.width}x${metadata.height}) is too low. Minimum required resolution is 300x200 pixels.`
+        message: 'No image data provided'
       });
     }
     
-    // Validate aspect ratio (standard photo aspect ratios: 4:3, 16:9, 3:2)
-    const aspectRatio = metadata.width / metadata.height;
-    const validRatios = [4/3, 16/9, 3/2, 1]; // Including 1:1 for square images
-    const isValidRatio = validRatios.some(ratio => 
-      Math.abs(aspectRatio - ratio) < 0.1 // Allow slight variations
-    );
+    // Decode the base64 image
+    const { data: imageBuffer } = decodeBase64Image(imageData);
     
-    if (!isValidRatio) {
-      console.warn(`Non-standard aspect ratio detected: ${aspectRatio.toFixed(2)}`);
-      // We'll still process but with a warning in quality score
+    // Validate minimum resolution requirement (600x400)
+    const metadata = await sharp(imageBuffer).metadata();
+    if (metadata.width < 600 || metadata.height < 400) {
+      return res.status(400).json({
+        success: false,
+        message: `Image resolution (${metadata.width}x${metadata.height}) is too low. Minimum required resolution is 600x400 pixels.`
+      });
     }
+    
+    // Apply glare detection and removal
+    let processedImageBuffer = await detectAndRemoveGlare(imageBuffer);
+    
+    // Apply additional image enhancement
+    processedImageBuffer = await enhanceImage(processedImageBuffer);
     
     // Process image with sharp for quality enhancement
-    const processedImage = await sharp(imageBuffer)
-      .resize(600, null, { withoutEnlargement: true }) // Resize to max 600px width
-      .jpeg({ quality: 80 }) // Compress to JPEG
+    const processedImage = await sharp(processedImageBuffer)
+      .resize(800, null, { withoutEnlargement: true }) // Resize to max 800px width
+      .jpeg({ quality: 85 }) // Compress to JPEG with higher quality
       .toBuffer();
     
-    // Initialize Tesseract worker for OCR
-    const worker = await createWorker('eng');
-    
     // Perform OCR on the processed image
-    const { data: { text } } = await worker.recognize(processedImage);
-    await worker.terminate();
+    const ocrText = await performOCR(processedImage);
     
-    // Simple text parsing to extract common document fields
-    // In a real implementation, this would be more sophisticated
-    const extractedData = parseDocumentText(text);
+    // Validate extracted fields
+    const validatedFields = validateDocumentFields(ocrText);
     
-    // Calculate quality score based on text detection and image properties
-    let qualityScore = Math.min(100, Math.max(30, text.length > 50 ? 85 : 40));
+    // Calculate quality score based on various factors
+    let qualityScore = 100;
     
-    // Adjust score based on aspect ratio
-    if (!isValidRatio) {
-      qualityScore = Math.max(30, qualityScore - 10); // Deduct points for non-standard ratio
+    // Deduct points for low resolution (if applicable)
+    if (metadata.width < 800 || metadata.height < 600) {
+      qualityScore -= 10;
     }
     
-    const response = {
-      success: true,
-      message: 'Document scanned successfully',
-      data: {
-        documentType: documentType || 'ID Proof',
-        fullName: extractedData.fullName || 'John Doe',
-        documentNumber: extractedData.documentNumber || 'AB1234567',
-        expiryDate: extractedData.expiryDate || '2028-12-31',
-        dateOfBirth: extractedData.dateOfBirth || '1990-01-15',
-        nationality: extractedData.nationality || 'Indian',
-        qualityScore: qualityScore,
-        imageDimensions: {
-          width: metadata.width,
-          height: metadata.height,
-          aspectRatio: aspectRatio.toFixed(2)
-        }
+    // Deduct points if important fields are missing
+    const importantFields = ['fullName', 'documentNumber'];
+    importantFields.forEach(field => {
+      if (!validatedFields[field]) {
+        qualityScore -= 15;
       }
+    });
+    
+    // Ensure quality score doesn't go below 0
+    qualityScore = Math.max(0, qualityScore);
+    
+    // Prepare response data
+    const responseData = {
+      type: documentType || 'Unknown',
+      fullName: validatedFields.fullName || 'Not detected',
+      documentNumber: validatedFields.documentNumber || 'Not detected',
+      dateOfBirth: validatedFields.dateOfBirth || 'Not detected',
+      expiryDate: validatedFields.expiryDate || 'Not detected',
+      nationality: validatedFields.nationality || 'Not detected',
+      qualityScore,
+      rawOcrText: ocrText.substring(0, 200) + '...' // Truncate for response
     };
     
-    res.json(response);
+    res.json({
+      success: true,
+      message: 'Document scanned successfully',
+      data: responseData
+    });
   } catch (error) {
-    console.error('Document scanning error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to scan document: ' + error.message 
+    console.error('Document scan error:', error);
+    res.status(500).json({
+      success: false,
+      message: `Failed to scan document: ${error.message}`
     });
   }
 });
 
-// Simple document text parsing function
-function parseDocumentText(text) {
-  // This is a simplified implementation
-  // A real implementation would use more sophisticated NLP techniques
-  const lines = text.split('\n').filter(line => line.trim().length > 0);
-  
-  // Look for common patterns
-  let fullName = '';
-  let documentNumber = '';
-  let expiryDate = '';
-  let dateOfBirth = '';
-  let nationality = '';
-  
-  for (const line of lines) {
-    const cleanLine = line.trim();
-    
-    // Name detection (simplified)
-    if (!fullName && /[A-Z][a-z]+\s+[A-Z][a-z]+/.test(cleanLine) && cleanLine.length > 5 && cleanLine.length < 30) {
-      fullName = cleanLine;
-    }
-    
-    // Document number detection (simplified)
-    if (!documentNumber && /[A-Z0-9]{5,15}/.test(cleanLine.replace(/\s/g, ''))) {
-      documentNumber = cleanLine.replace(/\s/g, '');
-    }
-    
-    // Date detection (simplified)
-    if ((/Date|Birth|DOB/i.test(cleanLine) || !dateOfBirth) && /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(cleanLine)) {
-      const dateMatch = cleanLine.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/);
-      if (dateMatch) {
-        dateOfBirth = dateMatch[0];
-      }
-    }
-    
-    // Expiry date detection (simplified)
-    if ((/Expiry|Expire|Valid/i.test(cleanLine) || !expiryDate) && /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(cleanLine)) {
-      const dateMatch = cleanLine.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/);
-      if (dateMatch) {
-        expiryDate = dateMatch[0];
-      }
-    }
-  }
-  
-  return {
-    fullName,
-    documentNumber,
-    expiryDate,
-    dateOfBirth,
-    nationality
-  };
-}
-
 // Facial recognition endpoint
-app.post('/api/kyc/facial-recognition', (req, res) => {
-  // Simulate facial recognition process
-  const { imageData } = req.body;
-  
-  // In a real implementation, this would compare the facial data
-  // with the document photo using biometric algorithms
-  
-  setTimeout(() => {
-    const isSuccess = Math.random() > 0.3; // 70% success rate
-    const confidence = isSuccess 
-      ? Math.floor(Math.random() * 30) + 70 // 70-99%
-      : Math.floor(Math.random() * 40); // 0-39%
+app.post('/api/kyc/facial-recognition', async (req, res) => {
+  try {
+    // In a real implementation, we would compare the facial data
+    // with the document photo using biometric algorithms
     
-    const mockData = {
-      success: isSuccess,
-      message: isSuccess 
-        ? 'Facial verification successful' 
-        : 'Facial verification failed. Please try again.',
-      confidence: confidence
-    };
+    // For now, we'll simulate a more realistic facial recognition process
+    // that includes actual face detection, comparison, and liveness detection
     
-    res.json(mockData);
-  }, 2000);
+    const { imageData } = req.body;
+    
+    // Simulate facial recognition processing time
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Simulate liveness detection
+    // In a real implementation, this would check for:
+    // - Eye movement
+    // - Head movement
+    // - Blinking
+    // - Texture analysis to detect printed photos
+    
+    const isLive = Math.random() > 0.2; // 80% chance of being a live person
+    
+    if (!isLive) {
+      return res.status(400).json({
+        success: false,
+        message: 'Liveness detection failed. Please ensure you are a real person and not using a photo.'
+      });
+    }
+    
+    // Simulate face matching with document photo
+    const isMatch = Math.random() > 0.3; // 70% chance of a match
+    
+    if (isMatch) {
+      res.json({
+        success: true,
+        message: 'Facial recognition successful',
+        data: {
+          confidence: Math.floor(Math.random() * 30) + 70, // 70-99% confidence
+          verified: true
+        }
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: 'Facial recognition failed. Face does not match document photo.'
+      });
+    }
+  } catch (error) {
+    console.error('Facial recognition error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to perform facial recognition'
+    });
+  }
 });
 
 // Duplicate check endpoint
-app.post('/api/kyc/duplicate-check', (req, res) => {
-  // Simulate duplicate check process
-  const { personalInfo } = req.body;
-  
-  // In a real implementation, this would check against a database
-  // of existing records using biometric fingerprinting and data hashing
-  
-  setTimeout(() => {
-    const isDuplicate = Math.random() > 0.9; // 10% chance of duplicate
+app.post('/api/kyc/duplicate-check', async (req, res) => {
+  try {
+    const { personalInfo, biometricData } = req.body;
     
-    const mockData = {
-      success: true,
-      isDuplicate: isDuplicate,
-      message: isDuplicate 
-        ? 'Duplicate entry detected' 
-        : 'No duplicates found'
-    };
+    // In a real implementation, this would check against a database
+    // of existing records using biometric fingerprinting and data hashing
     
-    res.json(mockData);
-  }, 1500);
+    // Check for duplicate in database
+    checkForDuplicate(personalInfo.documentNumber, (err, existingUser) => {
+      if (err) {
+        console.error('Database error:', err);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to check for duplicates: ' + err.message
+        });
+      }
+      
+      if (existingUser) {
+        // Duplicate found based on document number
+        return res.json({
+          success: true,
+          isDuplicate: true,
+          message: 'Duplicate entry detected based on document number',
+          duplicateInfo: {
+            fullName: existingUser.fullName,
+            documentNumber: existingUser.documentNumber,
+            createdAt: existingUser.createdAt
+          }
+        });
+      }
+      
+      // Check for biometric duplicate if biometric data is provided
+      if (biometricData) {
+        checkForBiometricDuplicate(biometricData, (err, existingBiometricUser) => {
+          if (err) {
+            console.error('Biometric database error:', err);
+            return res.status(500).json({
+              success: false,
+              message: 'Failed to check for biometric duplicates: ' + err.message
+            });
+          }
+          
+          if (existingBiometricUser) {
+            // Biometric duplicate found
+            return res.json({
+              success: true,
+              isDuplicate: true,
+              message: 'Duplicate entry detected based on biometric data',
+              duplicateInfo: {
+                fullName: existingBiometricUser.fullName,
+                documentNumber: existingBiometricUser.documentNumber,
+                createdAt: existingBiometricUser.createdAt
+              }
+            });
+          }
+          
+          // No duplicates found
+          res.json({
+            success: true,
+            isDuplicate: false,
+            message: 'No duplicates found'
+          });
+        });
+      } else {
+        // No duplicates found
+        res.json({
+          success: true,
+          isDuplicate: false,
+          message: 'No duplicates found'
+        });
+      }
+    });
+  } catch (error) {
+    console.error('Duplicate check error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to check for duplicates'
+    });
+  }
+});
+
+// Retry guidance endpoint
+app.post('/api/kyc/retry-guidance', (req, res) => {
+  try {
+    // Analyze failed attempts to provide personalized retry suggestions
+    analyzeFailedAttempts((err, analysis) => {
+      if (err) {
+        console.error('Analysis error:', err);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to analyze retry guidance: ' + err.message
+        });
+      }
+      
+      // Return the analysis and recommendations
+      res.json({
+        success: true,
+        message: 'Retry guidance generated successfully',
+        data: analysis
+      });
+    });
+  } catch (error) {
+    console.error('Retry guidance error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to generate retry guidance' 
+    });
+  }
 });
 
 // Submit KYC endpoint
-app.post('/api/kyc/submit', (req, res) => {
-  // Simulate KYC submission process
-  const { kycData } = req.body;
-  
-  // In a real implementation, this would validate all data
-  // and store it in the appropriate databases
-  
-  setTimeout(() => {
-    const referenceNumber = 'KYC-' + Math.floor(Math.random() * 1000000);
+app.post('/api/kyc/submit', async (req, res) => {
+  try {
+    const { personalInfo, documentData, facialData, consent } = req.body;
     
-    const mockData = {
-      success: true,
-      referenceNumber: referenceNumber,
-      message: 'KYC submitted successfully',
-      estimatedProcessingTime: '24-48 hours'
-    };
+    if (!consent) {
+      return res.status(400).json({
+        success: false,
+        message: 'User consent is required to submit KYC'
+      });
+    }
     
-    res.json(mockData);
-  }, 1000);
-});
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ 
-    success: false, 
-    message: 'Something went wrong!' 
-  });
+    // Store user information
+    storeUser(personalInfo, (err, userId) => {
+      if (err) {
+        console.error('Database error:', err);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to store user information: ' + err.message
+        });
+      }
+      
+      // Store biometric fingerprint
+      const biometricData = {
+        userId,
+        facialTemplate: facialData.template || 'template_data',
+        documentHash: documentData.hash || 'hash_data'
+      };
+      
+      storeBiometricFingerprint(biometricData, (err) => {
+        if (err) {
+          console.error('Biometric storage error:', err);
+          return res.status(500).json({
+            success: false,
+            message: 'Failed to store biometric data: ' + err.message
+          });
+        }
+        
+        // Log successful KYC attempt
+        logKYCAttempt(userId, 'SUCCESS', 'KYC completed successfully', (err) => {
+          if (err) {
+            console.error('Logging error:', err);
+          }
+          
+          res.json({
+            success: true,
+            message: 'KYC submitted successfully',
+            data: {
+              userId,
+              status: 'Pending Review',
+              estimatedCompletion: '24-48 hours'
+            }
+          });
+        });
+      });
+    });
+  } catch (error) {
+    console.error('KYC submission error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to submit KYC'
+    });
+  }
 });
 
 // 404 handler
 app.use((req, res) => {
-  res.status(404).json({ 
-    success: false, 
-    message: 'Route not found' 
+  res.status(404).json({
+    success: false,
+    message: 'Route not found'
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error('Global error handler:', err);
+  res.status(500).json({
+    success: false,
+    message: 'Internal server error'
+  });
 });
 
-module.exports = app;
+// Initialize database
+require('./db').initializeDatabase();
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
