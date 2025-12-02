@@ -2,6 +2,45 @@
 
 This repository contains a complete implementation of a digital KYC (Know Your Customer) system inspired by HDFC Bank's onboarding process. The system includes advanced security features, scalability mechanisms, error handling, and a comprehensive user experience.
 
+## Project Structure
+
+```
+prob1/
+├── kyc-client/                 # React frontend application
+│   ├── public/                 # Static assets
+│   ├── src/                    # Source code
+│   │   ├── components/         # React components
+│   │   │   ├── DocumentScanner.css/js     # Document scanning functionality
+│   │   │   ├── ErrorRecovery.css/js       # Error handling and recovery
+│   │   │   ├── FacialRecognition.css/js   # Facial recognition components
+│   │   │   ├── KYCDashboard.css/js       # Analytics dashboard
+│   │   │   ├── KYCProgress.css/js        # Progress tracking
+│   │   │   ├── Login.css/js              # Authentication
+│   │   │   └── SupportAssistant.css/js   # 24/7 AI support assistant
+│   │   ├── services/           # API services
+│   │   │   └── api.js         # Backend API communication
+│   │   ├── App.css            # Main application styles
+│   │   ├── App.js             # Main application component
+│   │   ├── index.css          # Global styles
+│   │   └── index.js           # Application entry point
+│   ├── package.json           # Frontend dependencies
+│   └── README.md              # Frontend documentation
+├── server/                    # Node.js backend server
+│   ├── db.js                 # Database operations
+│   ├── index.js              # Server entry point
+│   ├── kyc.db                # SQLite database
+│   ├── package.json          # Backend dependencies
+│   └── eng.traineddata       # Tesseract OCR data
+├── DIGITAL_KYC_SOLUTION.md   # Complete solution documentation
+├── FINAL_SUMMARY.md          # Final project summary
+├── IMPLEMENTATION_SUMMARY.md # Technical implementation details
+├── INFRASTRUCTURE.md         # Scalability and infrastructure details
+├── README.md                 # This file
+├── SECURITY.md               # Security implementation details
+├── SUPPORT_SYSTEM.md         # 24/7 support system documentation
+└── setup.js                 # Initial setup script
+```
+
 ## Features Implemented
 
 ### 1. Step-by-Step Guided KYC Flow
@@ -135,13 +174,13 @@ The system uses SQLite with the following tables:
 
 The application will be available at `http://localhost:3000`.
 
-## Documentation
+## Documentation Files
 
-Several documentation files are included:
 - `DIGITAL_KYC_SOLUTION.md`: Complete solution documentation
-- `SECURITY.md`: Detailed security implementation
+- `FINAL_SUMMARY.md`: Final project summary
+- `IMPLEMENTATION_SUMMARY.md`: Technical implementation details
 - `INFRASTRUCTURE.md`: Scalability and infrastructure details
-- `IMPLEMENTATION_SUMMARY.md`: Technical implementation summary
+- `SECURITY.md`: Security implementation details
 - `SUPPORT_SYSTEM.md`: 24/7 support system documentation
 
 ## Contributing
