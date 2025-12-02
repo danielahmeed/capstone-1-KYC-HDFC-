@@ -7,10 +7,12 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const { createWorker } = require('tesseract.js');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
 const { checkForDuplicate, checkForBiometricDuplicate, storeUser, storeBiometricFingerprint, logKYCAttempt, analyzeFailedAttempts } = require('./db');
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5003;
 
 // Middleware
 app.use(helmet());
@@ -18,6 +20,9 @@ app.use(cors());
 app.use(morgan('combined'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// JWT Secret (in production, use environment variables)
+const JWT_SECRET = process.env.JWT_SECRET || 'hdfc_kyc_secret_key';
 
 // Multer configuration for file uploads
 const upload = multer({ 
@@ -169,8 +174,189 @@ function enhanceImage(imageBuffer) {
     .toBuffer();
 }
 
+// JWT Authentication Middleware
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+  
+  if (!token) {
+    return res.status(401).json({ success: false, message: 'Access token required' });
+  }
+  
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ success: false, message: 'Invalid or expired token' });
+    }
+    req.user = user;
+    next();
+  });
+}
+
+// Rate limiting middleware
+const rateLimitMap = new Map();
+
+function rateLimiter(req, res, next) {
+  const clientId = req.ip || req.connection.remoteAddress;
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000; // 15 minutes
+  const maxRequests = 100; // Max 100 requests per window
+  
+  if (!rateLimitMap.has(clientId)) {
+    rateLimitMap.set(clientId, {
+      requests: [{ timestamp: now }],
+      resetTime: now + windowMs
+    });
+    return next();
+  }
+  
+  const clientData = rateLimitMap.get(clientId);
+  
+  // Reset if window has passed
+  if (now > clientData.resetTime) {
+    rateLimitMap.set(clientId, {
+      requests: [{ timestamp: now }],
+      resetTime: now + windowMs
+    });
+    return next();
+  }
+  
+  // Filter out old requests
+  const recentRequests = clientData.requests.filter(request => 
+    request.timestamp > now - windowMs
+  );
+  
+  // Check if limit exceeded
+  if (recentRequests.length >= maxRequests) {
+    return res.status(429).json({
+      success: false,
+      message: 'Too many requests, please try again later'
+    });
+  }
+  
+  // Add current request
+  recentRequests.push({ timestamp: now });
+  rateLimitMap.set(clientId, {
+    requests: recentRequests,
+    resetTime: clientData.resetTime
+  });
+  
+  next();
+}
+
+// Authentication endpoint
+app.post('/api/auth/login', rateLimiter, async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    // In a real implementation, you would verify credentials against a database
+    // For demo purposes, we'll simulate a successful login
+    if (!username || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Username and password are required'
+      });
+    }
+    
+    // Simulate user lookup and password verification
+    // In real implementation: const user = await getUserByUsername(username);
+    // const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
+    
+    // For demo, we'll create a mock user
+    const user = {
+      id: 1,
+      username: username,
+      email: `${username}@hdfcbank.com`
+    };
+    
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user.id, username: user.username },
+      JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+    
+    res.json({
+      success: true,
+      message: 'Login successful',
+      data: {
+        token,
+        user: {
+          id: user.id,
+          username: user.username,
+          email: user.email
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Login failed'
+    });
+  }
+});
+
+// Save KYC progress endpoint
+app.post('/api/kyc/save-progress', authenticateToken, rateLimiter, (req, res) => {
+  try {
+    const { progressData } = req.body;
+    const userId = req.user.userId;
+    
+    // In a real implementation, you would save this to a database
+    // For now, we'll just log it and return success
+    console.log(`Saving KYC progress for user ${userId}:`, progressData);
+    
+    // Simulate database save
+    // await saveKYCProgress(userId, progressData);
+    
+    res.json({
+      success: true,
+      message: 'KYC progress saved successfully'
+    });
+  } catch (error) {
+    console.error('Save progress error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to save KYC progress'
+    });
+  }
+});
+
+// Get KYC progress endpoint
+app.get('/api/kyc/progress', authenticateToken, rateLimiter, (req, res) => {
+  try {
+    const userId = req.user.userId;
+    
+    // In a real implementation, you would retrieve this from a database
+    // For now, we'll just return a mock response
+    console.log(`Retrieving KYC progress for user ${userId}`);
+    
+    // Simulate database retrieval
+    // const progress = await getKYCProgress(userId);
+    
+    res.json({
+      success: true,
+      message: 'KYC progress retrieved successfully',
+      data: {
+        currentStep: 0,
+        personalInfo: {},
+        documentData: null,
+        aadhaarData: {},
+        facialVerified: false,
+        kycSession: {}
+      }
+    });
+  } catch (error) {
+    console.error('Get progress error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve KYC progress'
+    });
+  }
+});
+
 // Document scanning endpoint with real image processing
-app.post('/api/kyc/document-scan', async (req, res) => {
+app.post('/api/kyc/document-scan', authenticateToken, rateLimiter, async (req, res) => {
   try {
     const { documentType, imageData } = req.body;
     
@@ -257,7 +443,7 @@ app.post('/api/kyc/document-scan', async (req, res) => {
 });
 
 // Facial recognition endpoint
-app.post('/api/kyc/facial-recognition', async (req, res) => {
+app.post('/api/kyc/facial-recognition', authenticateToken, rateLimiter, async (req, res) => {
   try {
     // In a real implementation, we would compare the facial data
     // with the document photo using biometric algorithms
@@ -314,7 +500,7 @@ app.post('/api/kyc/facial-recognition', async (req, res) => {
 });
 
 // Duplicate check endpoint
-app.post('/api/kyc/duplicate-check', async (req, res) => {
+app.post('/api/kyc/duplicate-check', authenticateToken, rateLimiter, async (req, res) => {
   try {
     const { personalInfo, biometricData } = req.body;
     
@@ -396,7 +582,7 @@ app.post('/api/kyc/duplicate-check', async (req, res) => {
 });
 
 // Retry guidance endpoint
-app.post('/api/kyc/retry-guidance', (req, res) => {
+app.post('/api/kyc/retry-guidance', authenticateToken, rateLimiter, (req, res) => {
   try {
     // Analyze failed attempts to provide personalized retry suggestions
     analyzeFailedAttempts((err, analysis) => {
@@ -425,7 +611,7 @@ app.post('/api/kyc/retry-guidance', (req, res) => {
 });
 
 // Submit KYC endpoint
-app.post('/api/kyc/submit', async (req, res) => {
+app.post('/api/kyc/submit', authenticateToken, rateLimiter, async (req, res) => {
   try {
     const { personalInfo, documentData, facialData, consent } = req.body;
     
@@ -485,6 +671,124 @@ app.post('/api/kyc/submit', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to submit KYC'
+    });
+  }
+});
+
+// Aadhaar verification endpoints
+app.post('/api/kyc/aadhaar/send-otp', authenticateToken, rateLimiter, (req, res) => {
+  try {
+    const { aadhaarNumber } = req.body;
+    
+    // Validate Aadhaar number format
+    if (!aadhaarNumber || !/^\d{12}$/.test(aadhaarNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Aadhaar number. Please provide a 12-digit number.'
+      });
+    }
+    
+    // In a real implementation, you would integrate with UIDAI APIs
+    // For demo, we'll simulate a successful OTP send
+    console.log(`Sending OTP to Aadhaar number: ${aadhaarNumber}`);
+    
+    res.json({
+      success: true,
+      message: 'OTP sent successfully to registered mobile number'
+    });
+  } catch (error) {
+    console.error('Aadhaar OTP error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to send OTP'
+    });
+  }
+});
+
+app.post('/api/kyc/aadhaar/verify-otp', authenticateToken, rateLimiter, (req, res) => {
+  try {
+    const { aadhaarNumber, otp } = req.body;
+    
+    // Validate inputs
+    if (!aadhaarNumber || !/^\d{12}$/.test(aadhaarNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Aadhaar number. Please provide a 12-digit number.'
+      });
+    }
+    
+    if (!otp || !/^\d{6}$/.test(otp)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid OTP. Please provide a 6-digit code.'
+      });
+    }
+    
+    // In a real implementation, you would integrate with UIDAI APIs
+    // For demo, we'll simulate a successful verification
+    console.log(`Verifying OTP for Aadhaar number: ${aadhaarNumber}`);
+    
+    res.json({
+      success: true,
+      message: 'Aadhaar verified successfully'
+    });
+  } catch (error) {
+    console.error('Aadhaar verification error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to verify Aadhaar'
+    });
+  }
+});
+
+// KYC Dashboard endpoint
+app.get('/api/kyc/dashboard', authenticateToken, rateLimiter, (req, res) => {
+  try {
+    // In a real implementation, this would query the database for analytics
+    // For demo, we'll return mock data
+    
+    const dashboardData = {
+      totalKycAttempts: 1250,
+      successfulKyc: 950,
+      failedKyc: 300,
+      successRate: 76,
+      failureByStep: {
+        'Personal Info': 45,
+        'PAN Upload': 85,
+        'Aadhaar OTP': 75,
+        'Face Match': 60,
+        'Final Review': 35
+      },
+      uploadFailures: 120,
+      otpFailures: 95,
+      faceMismatch: 85,
+      dailySuccessRates: [
+        { date: '2025-11-25', rate: 72 },
+        { date: '2025-11-26', rate: 75 },
+        { date: '2025-11-27', rate: 78 },
+        { date: '2025-11-28', rate: 74 },
+        { date: '2025-11-29', rate: 76 },
+        { date: '2025-11-30', rate: 77 },
+        { date: '2025-12-01', rate: 76 }
+      ],
+      weeklySuccessRates: [
+        { week: 'Week 1', rate: 68 },
+        { week: 'Week 2', rate: 72 },
+        { week: 'Week 3', rate: 75 },
+        { week: 'Week 4', rate: 76 }
+      ]
+    };
+    
+    res.json({
+      success: true,
+      message: 'Dashboard data retrieved successfully',
+      data: dashboardData
+    });
+  } catch (error) {
+    console.error('Dashboard data error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve dashboard data'
     });
   }
 });
