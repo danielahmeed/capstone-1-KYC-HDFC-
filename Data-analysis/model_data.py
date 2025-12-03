@@ -7,13 +7,22 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 from sklearn.preprocessing import LabelEncoder
 
-# Define file path
-file_path = r"c:\Users\ahmed\Desktop\hdfc notes\Capstone Project\prob1\Data-analysis\Digital KYC_Reduce Drop-Off_Lift Conversion.xlsx"
-output_dir = r"c:\Users\ahmed\Desktop\hdfc notes\Capstone Project\prob1\Data-analysis"
+# Define file paths relative to the script location
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+FILE_PATH = os.path.join(SCRIPT_DIR, "Digital KYC_Reduce Drop-Off_Lift Conversion.xlsx")
+OUTPUT_DIR = SCRIPT_DIR
 
 def load_data(path):
+    """
+    Load data from the Excel file.
+    Handles finding the correct header row.
+    """
     print(f"Loading data from {path}...")
     try:
+        if not os.path.exists(path):
+            print(f"Error: File not found at {path}")
+            return None
+
         # Read first few rows to find header
         df_temp = pd.read_excel(path, header=None)
         
@@ -35,13 +44,20 @@ def load_data(path):
         return None
 
 def preprocess_data(df):
+    """
+    Preprocess the data for modeling.
+    Creates target variable, drops irrelevant columns, and handles categorical variables.
+    """
     print("\n--- Preprocessing Data ---")
     
     # Create Target Variable
     # 1 if KYC Successful, 0 otherwise
-    df['Is_Successful'] = df['Error'].apply(lambda x: 1 if str(x).strip() == 'KYC Successful' else 0)
-    
-    print(f"Target Distribution:\n{df['Is_Successful'].value_counts()}")
+    if 'Error' in df.columns:
+        df['Is_Successful'] = df['Error'].apply(lambda x: 1 if str(x).strip() == 'KYC Successful' else 0)
+        print(f"Target Distribution:\n{df['Is_Successful'].value_counts()}")
+    else:
+        print("Warning: 'Error' column not found. Cannot create target variable.")
+        return None
     
     # Drop irrelevant columns
     drop_cols = ['S.No.', 'Customer ID', 'Error']
@@ -62,6 +78,9 @@ def preprocess_data(df):
     return df
 
 def train_model(df):
+    """
+    Train a Random Forest classifier.
+    """
     print("\n--- Training Model ---")
     
     X = df.drop('Is_Successful', axis=1)
@@ -81,7 +100,7 @@ def train_model(df):
     print("\nClassification Report:")
     print(report)
     
-    with open(os.path.join(output_dir, "model_results.txt"), "w") as f:
+    with open(os.path.join(OUTPUT_DIR, "model_results.txt"), "w") as f:
         f.write(f"Accuracy: {acc}\n")
         f.write("\nClassification Report:\n")
         f.write(report)
@@ -94,6 +113,9 @@ def train_model(df):
     return rf, X.columns
 
 def plot_feature_importance(model, feature_names, output_folder):
+    """
+    Plot and save feature importance.
+    """
     print("\n--- Plotting Feature Importance ---")
     importances = model.feature_importances_
     indices = importances.argsort()[::-1]
@@ -108,8 +130,10 @@ def plot_feature_importance(model, feature_names, output_folder):
     print(f"Saved feature importance plot: {filename}")
 
 if __name__ == "__main__":
-    df = load_data(file_path)
+    df = load_data(FILE_PATH)
     if df is not None:
         df_processed = preprocess_data(df)
-        model, feature_names = train_model(df_processed)
-        plot_feature_importance(model, feature_names, output_dir)
+        if df_processed is not None:
+            model, feature_names = train_model(df_processed)
+            plot_feature_importance(model, feature_names, OUTPUT_DIR)
+
