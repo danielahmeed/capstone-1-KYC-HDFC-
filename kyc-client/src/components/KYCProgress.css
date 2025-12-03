@@ -1,0 +1,113 @@
+.kyc-progress {
+  max-width: 1000px;
+  margin: 0 auto 30px;
+  padding: 20px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.progress-container {
+  margin-top: 20px;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 10px;
+  background-color: #e9ecef;
+  border-radius: 5px;
+  margin-bottom: 30px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background-color: #007bff;
+  border-radius: 5px;
+  transition: width 0.3s ease;
+}
+
+.step-indicators {
+  display: flex;
+  justify-content: space-between;
+  position: relative;
+}
+
+.step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  position: relative;
+  padding: 0 10px;
+}
+
+.step:not(:last-child):before {
+  content: '';
+  position: absolute;
+  top: 15px;
+  left: 50%;
+  right: -50%;
+  height: 2px;
+  background-color: #e9ecef;
+  z-index: 1;
+}
+
+.step.completed:before {
+  background-color: #007bff;
+}
+
+.step-number {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background-color: #e9ecef;
+  color: #6c757d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  margin-bottom: 10px;
+  position: relative;
+  z-index: 2;
+}
+
+.step.active .step-number {
+  background-color: #007bff;
+  color: white;
+}
+
+.step.completed .step-number {
+  background-color: #28a745;
+  color: white;
+}
+
+.step-label {
+  text-align: center;
+  font-size: 14px;
+  color: #6c757d;
+  max-width: 120px;
+  font-weight: 500;
+  margin-bottom: 5px;
+}
+
+.step.active .step-label {
+  color: #007bff;
+  font-weight: bold;
+}
+
+.step.completed .step-label {
+  color: #28a745;
+  font-weight: bold;
+}
+
+.step-description {
+  text-align: center;
+  font-size: 11px;
+  color: #6c757d;
+  max-width: 120px;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

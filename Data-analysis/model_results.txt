@@ -1,0 +1,18 @@
+Accuracy: 1.0
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       1.00      1.00      1.00       111
+           1       1.00      1.00      1.00         9
+
+    accuracy                           1.00       120
+   macro avg       1.00      1.00      1.00       120
+weighted avg       1.00      1.00      1.00       120
+
+
+Feature Importance:
+Stage Name: 0.5084934320763078
+Failure Percentage: 0.3753157044483293
+Time Taken (in seconds): 0.06862142995972147
+Attempt Count: 0.047569433515641475
