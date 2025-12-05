@@ -25,6 +25,15 @@ app.use(morgan('combined'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Root route for health check
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Digital KYC Server is running',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Serve uploaded files
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
