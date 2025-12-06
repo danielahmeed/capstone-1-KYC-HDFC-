@@ -66,6 +66,10 @@ prob1/
 └── setup.js                 # Initial setup script
 ```
 
+## System Architecture
+
+![System Architecture Diagram](assets/architecture_diagram.png)
+
 ## Innovative Solution Design & Features
 
 ### 1. Step-by-Step Guided KYC Flow
