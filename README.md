@@ -231,6 +231,7 @@ The application will be available at `http://localhost:3000`.
 - `INFRASTRUCTURE.md`: Scalability and infrastructure details
 - `SECURITY.md`: Security implementation details
 - `SUPPORT_SYSTEM.md`: 24/7 support system documentation
+- [Project Presentation (Google Slides)](https://docs.google.com/presentation/d/1OUI4BpJ4jRCmb8ijHw6F4JLVa9QxtLfrQcKWu6x6IrY/edit?usp=sharing)
 
 ## Contributing
 
