@@ -1,5 +1,15 @@
 # HDFC Bank-Style Digital KYC System
 
+> [!IMPORTANT]
+> **Project Status: Preparatory Phase (Proof of Work)**
+> This project is currently in the preparatory phase to demonstrate the technical capabilities and innovative features of the proposed Digital KYC solution. The live deployment serves as a proof of work for evaluation purposes.
+
+## 🚀 Live Demo
+- **Frontend (Client):** [https://frontend-5tokfa2vx-danielahmeeds-projects.vercel.app/](https://frontend-5tokfa2vx-danielahmeeds-projects.vercel.app/)
+- **Backend (API):** [https://capstone-1-kyc-hdfc-1.onrender.com](https://capstone-1-kyc-hdfc-1.onrender.com)
+
+> **Note:** The backend is hosted on a free tier service (Render), so it may take a minute to wake up on the first request. Please be patient!
+
 ## Problem Statement & Business Context
 In the digital banking era, a seamless KYC (Know Your Customer) process is critical for customer acquisition. High drop-off rates during KYC are a significant revenue leak for banks. This project addresses the challenge of **reducing customer drop-off and lifting conversion rates** by implementing a robust, user-centric, and AI-powered Digital KYC solution.
 
@@ -15,6 +25,12 @@ This repository contains a complete implementation of this solution, inspired by
 
 ```
 prob1/
+├── Data-analysis/              # Data analysis scripts and models
+│   ├── analyze_data.py         # Data analysis script
+│   ├── model_data.py           # ML model training script
+│   ├── inspect_columns.py      # Column inspection utility
+│   ├── *.png                   # Analysis visualizations
+│   └── *.docx/xlsx             # Analysis reports and raw data
 ├── kyc-client/                 # React frontend application
 │   ├── public/                 # Static assets
 │   ├── src/                    # Source code
@@ -49,6 +65,10 @@ prob1/
 ├── SUPPORT_SYSTEM.md         # 24/7 support system documentation
 └── setup.js                 # Initial setup script
 ```
+
+## System Architecture
+
+![System Architecture Diagram](assets/architecture_diagram.png)
 
 ## Innovative Solution Design & Features
 
@@ -211,6 +231,7 @@ The application will be available at `http://localhost:3000`.
 - `INFRASTRUCTURE.md`: Scalability and infrastructure details
 - `SECURITY.md`: Security implementation details
 - `SUPPORT_SYSTEM.md`: 24/7 support system documentation
+- [Project Presentation (Google Slides)](https://docs.google.com/presentation/d/1OUI4BpJ4jRCmb8ijHw6F4JLVa9QxtLfrQcKWu6x6IrY/edit?usp=sharing)
 
 ## Contributing
 

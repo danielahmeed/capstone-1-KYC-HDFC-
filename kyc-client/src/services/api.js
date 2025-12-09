@@ -2,7 +2,7 @@
 
 // API service for communicating with the backend
 
-const API_BASE_URL = '/api';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5003/api';
 
 // Retry utility function
 const retry = async (fn, retries = 3, delay = 1000) => {
